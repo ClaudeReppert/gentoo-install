@@ -1,0 +1,61 @@
+#!/bin/bash
+
+DEVICE="/dev/nvme0n1"
+EFI_PARTITION="/dev/nvme0n1p1"
+CRYPT_PARTITION="/dev/nvme0n1p2"
+ROOT_SIZE="100G"
+SWAP_SIZE="8G"
+fdisk "$DEVICE" <<EOF
+g
+n
+1
+2048
++1G
+t
+1
+n
+2
+
+
+t
+2
+23
+w
+EOF
+cryptsetup luksFormat --batch-mode "$CRYPT_PARTITION"
+cryptsetup luksHeaderBackup "$CRYPT_PARTITION" --header-backup-file root_headers.img
+cryptsetup luksOpen "$CRYPT_PARTITION" crypt_lvm
+pvcreate /dev/mapper/crypt_lvm
+vgcreate vg /dev/mapper/crypt_lvm
+lvcreate -L "$ROOT_SIZE" -n root vg
+lvcreate -L "$SWAP_SIZE" -n swap vg
+lvcreate -l 100%FREE -n home vg
+mkfs.vfat -F32 "$EFI_PARTITION"
+mkfs.ext4 /dev/vg/root
+mkswap /dev/vg/swap
+mkfs.ext4 /dev/vg/home
+mkdir --parents /mnt/gentoo
+mount /dev/vg/root /mnt/gentoo
+mkdir --parents /mnt/gentoo/home
+mkdir --parents /mnt/gentoo/efi
+mount /dev/vg/home /mnt/gentoo/home
+mount "$EFI_PARTITION" /mnt/gentoo/efi
+swapon /dev/vg/swap
+cd /mnt/gentoo
+wget https://distfiles.gentoo.org/releases/amd64/autobuilds/20250126T154834Z/stage3-amd64-desktop-systemd-20250126T154834Z.tar.xz
+tar xpvf stage3-amd64-desktop-systemd-20250126T154834Z.tar.xz --xattrs-include='*.*' --numeric-owner -C /mnt/gentoo
+cp --dereference /etc/resolv.conf /mnt/gentoo/etc/
+mount --types proc /proc /mnt/gentoo/proc
+mount --rbind /sys /mnt/gentoo/sys
+mount --make-rslave /mnt/gentoo/sys
+mount --rbind /dev /mnt/gentoo/dev
+mount --make-rslave /mnt/gentoo/dev
+mount --bind /run /mnt/gentoo/run
+mount --make-slave /mnt/gentoo/run
+test -L /dev/shm && rm /dev/shm && mkdir /dev/shm
+mount --types tmpfs --options nosuid,nodev,noexec shm /dev/shm
+chmod 1777 /dev/shm /run/shm
+chroot /mnt/gentoo /bin/bash
+source /etc/profile
+export PS1="(chroot) ${PS1}"
+emerge --sync --quiet
